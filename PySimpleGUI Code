@@ -1,0 +1,279 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar  2 11:54:27 2023
+
+@author: colbu
+"""
+
+import PySimpleGUI as sg
+import json
+import numpy as np
+import time as timing
+import os, struct, scipy, warnings
+from numba import jit
+import matplotlib.pyplot as plt 
+import TimeTagger as tt
+warnings.filterwarnings('ignore')
+from array import array
+import numba
+from time import sleep
+from ctypes import *
+from NanodriveControl import createScanPoints, startScanningWithoutWaveform
+import multiprocessing as mp
+
+if __name__ == '__main__':
+    #create the drop down menus 
+    nanoWaveForms = ['Square Raster', 'Sawtooth Raster']
+    # Define the filename for the saved values
+    values_file = 'saved_values.json'
+
+    # Load the saved values, if any
+    try:
+        with open(values_file, 'r') as f:
+            saved_values = json.load(f)
+    except FileNotFoundError:
+        saved_values = {}
+
+    # Define the layout of the input window
+    tagger_layout = [
+        [sg.Text('Select directory:'), sg.InputText(size=(100,1), key='-DIRECTORY-', default_text=saved_values.get('-DIRECTORY-', '')), sg.FolderBrowse()],
+        [
+            sg.Text('Presets:'), 
+            sg.Input(size=(30,1), key='-PRESETS-', default_text=saved_values.get('-PRESETS-', '')),
+            sg.Text('Channels:'), 
+            sg.Input(size=(10,1), key='-CHANNELS-', default_text=','.join(map(str, saved_values.get('-CHANNELS-', [])))),
+            sg.Text('Run Name:'), 
+            sg.Input(size=(30,1), key='-NAME-', default_text=saved_values.get('-NAME-', ''))
+        ],
+        [
+            sg.Text('Trigger Voltage:'), 
+            sg.Input(size=(7,1), key='-VOLTAGE-', default_text=saved_values.get('-VOLTAGE-', '')),
+            sg.Text('Integration Time(s):'), 
+            sg.Input(size=(5,1), key='-TIME-', default_text=saved_values.get('-TIME-', '')),
+            sg.Text('Test(y/n):'), 
+            sg.Input(size=(5,1), key='-TEST-', default_text=saved_values.get('-TEST-',''))
+        ],
+        [sg.Button('Collect Data')]
+    ]
+
+    nano_stage_layout = [
+        [sg.Text('Absolute Move'),
+        sg.InputText(size=(5,1), key='-ABSOLUTEMOVE-', default_text=','.join(map(str, saved_values.get('-ABSOLUTEMOVE-', [])))),
+        sg.Text('Motion Pattern'),
+        sg.DropDown(nanoWaveForms, key='-NANOWAVEFORMS-')],
+        
+        [sg.Text('Start X Coord'),
+        sg.InputText(size=(5,1), key='-STARTXCOORD-'),
+        sg.Text('End X Coord'),
+        sg.InputText(size=(5,1), key='-ENDXCOORD-'),
+        sg.Text('Start Y Coord'),
+        sg.InputText(size=(5,1), key='-STARTYCOORD-'),
+        sg.Text('End Y Coord'),
+        sg.InputText(size=(5,1), key='-ENDYCOORD-'),
+        sg.Text('# X of Points'),
+        sg.InputText(size=(5,1), key='-XPOINTS-'),
+        sg.Text('# Y of Points'),
+        sg.InputText(size=(5,1), key='-YPOINTS-'),
+        sg.Text('Pixel Dwell Time (set to zero for fast FOV)'),
+        sg.InputText(size=(5,1), key='-PIXELDWELLTIME-'),
+        sg.Text('Iterations'),
+        sg.InputText(size=(5,1), key='-ITERATIONS-'),
+
+        ],
+        
+
+        [sg.Button('Move to Abs Position'),
+        sg.Button('Start Scan')]
+    ]
+
+    layout = [[sg.TabGroup([[sg.Tab('Tagger', tagger_layout),
+                            sg.Tab('Nano Drive Stage', nano_stage_layout)]])]]
+    # Create the window
+    window = sg.Window('Input Window', layout)
+
+    # Event loop to process input
+    while True:
+        event, values = window.read()
+
+        # If the user closes the window, exit the loop
+        if event == sg.WINDOW_CLOSED:
+            break
+        '''
+        ==========================
+        Events on tab 1
+        ==========================
+        '''
+        if event == 'Collect Data':
+            voltage = float(values['-VOLTAGE-'])
+            time = int(values['-TIME-'])
+            presets = str(values['-PRESETS-'])
+            directory = str(values['-DIRECTORY-'])
+            name = str(values['-NAME-'])
+            channels = [int(x) for x in values['-CHANNELS-'].split(',')]
+            test = values['-TEST-']
+            tagger = tt.createTimeTagger()
+
+            if test == 'y':
+                tagger.setTestSignal(channels, True)
+                tagger.setInputDelay(1,2000)
+
+            
+            for i in range(len(channels)):
+                tagger.setTriggerLevel(channel=channels[i] ,voltage=voltage )
+            
+
+            synchronized = tt.SynchronizedMeasurements(tagger)
+
+            filewriter = tt.FileWriter(synchronized.getTagger(),  directory + os.sep + name, channels)
+
+            synchronized.startFor(1e12*int(time))  
+            synchronized.waitUntilFinished()
+            
+            del filewriter
+            del synchronized
+        
+
+            tt.freeTimeTagger(tagger)
+    
+
+
+            saved_values = {
+                '-VOLTAGE-': voltage,
+                '-TIME-': time,
+                '-PRESETS-': presets,
+                '-DIRECTORY-': directory,
+                '-NAME-': name,
+                '-CHANNELS-': channels,
+                '-TEST-' : test
+            }
+
+            with open(values_file, 'w') as f:
+                json.dump(saved_values, f)
+
+            print(f'Trigger Voltage: {voltage}')
+            print(f'Integration Time: {time}')
+            print(f'Presets: {presets}')
+            print(f'Directory: {directory}')
+            print(f'Run Name: {name}')
+            print(f'Channels: {channels}')
+        
+        ''' 
+        ================================
+        Events on tab 2
+        ================================
+        '''
+        if event == 'Move to Abs Position':
+
+            position = [int(x) for x in values['-ABSOLUTEMOVE-'].split(',')]
+            print( position)
+            # change the path to match your system.
+            mcldll = CDLL(r"C:/Program Files/Mad City Labs/NanoDrive/Madlib.dll")
+
+            # The correct return types for the functions used must be set.
+            mcldll.MCL_ReleaseHandle.restype = None
+            mcldll.MCL_SingleReadN.restype = c_double
+
+            # Acquire a device handle
+            handle = mcldll.MCL_InitHandle()
+            print("Handle = ", handle)
+
+            # Choose axis to move and new position in micrometers
+            axis_x = c_uint(1)
+            pos_x = c_double(position[0])
+
+            axis_y = c_uint(2)
+            pos_y = c_double(position[1])
+
+            # Move to a new position
+            error = mcldll.MCL_SingleWriteN(pos_x, axis_x, handle)
+            print("Error = ", error)
+
+            error = mcldll.MCL_SingleWriteN(pos_y, axis_y, handle)
+            print("Error = ", error)
+
+
+            # Wait for nanopositioner to settle
+            sleep(0.1)
+
+            # Read the new position
+            positionX = mcldll.MCL_SingleReadN(axis_x, handle)
+            print("PositionX = ", positionX)
+            positionY = mcldll.MCL_SingleReadN(axis_y, handle)
+            print("PositionY = ", positionY)
+
+            # Release the device handle
+            mcldll.MCL_ReleaseHandle(handle)
+
+            saved_values = {
+                '-ABSOLUTEMOVE-': position
+            }
+            with open(values_file, 'w') as f:
+                json.dump(saved_values, f)
+
+            
+        if event == 'Start Scan':
+
+            x_start = int(values['-STARTXCOORD-'])
+            y_start = int(values['-STARTYCOORD-'])
+            y_end = int(values['-ENDYCOORD-'])
+            x_end = int(values['-ENDXCOORD-'])
+            nx_pix = int(values['-XPOINTS-'])
+            ny_pix = int(values['-YPOINTS-'])
+            dwell_time = int(values['-PIXELDWELLTIME-'])
+            iterations = int(values['-ITERATIONS-'])
+            if values['-NANOWAVEFORMS-'] == 'Square Raster':
+                square_raster = True
+
+            createScanPoints(x_start, y_start, nx_pix, ny_pix, x_end, y_end, 'path', square_raster = False)
+
+        
+                
+            x_start = int(values['-STARTXCOORD-'])
+            y_start = int(values['-STARTYCOORD-'])
+            y_end = int(values['-ENDYCOORD-'])
+            x_end = int(values['-ENDXCOORD-'])
+            nx_pix = int(values['-XPOINTS-'])
+            ny_pix = int(values['-YPOINTS-'])
+            dwell_time = int(values['-PIXELDWELLTIME-'])
+            iterations = int(values['-ITERATIONS-'])
+            if values['-NANOWAVEFORMS-'] == 'Square Raster':
+                square_raster = True
+            else:
+                square_raster = False
+            n_pixels = nx_pix*ny_pix 
+            tagger = tt.createTimeTagger()
+            tagger.setTestSignal(1, True)
+
+            img = np.zeros((ny_pix, nx_pix))
+            for i in range(iterations):
+                
+                
+                cbm = tt.CountBetweenMarkers(tagger, 1, 3, 3, nx_pix*ny_pix )
+                p1 = mp.Process(target = startScanningWithoutWaveform, args = ('pathX.txt' , 'pathY.txt', None, 0, 1))
+                
+                p1.start()
+            
+                while p1.is_alive():
+                    counts = cbm.getData()
+                    current_img = np.reshape(counts, (ny_pix, nx_pix))
+                    
+                    for i in range(ny_pix):
+                        if i%2 == 1 and square_raster:
+                            current_img[i,:] = current_img[i,::-1]
+                    print(counts)
+                    mask = current_img !=0
+                    img[mask]=current_img[mask]
+                    
+                    plt.imshow(img)
+                    plt.pause(.00000000001)
+                p1.join()
+                
+            tt.freeTimeTagger(tagger) 
+            
+
+
+
+
+            
+
+    window.close()
