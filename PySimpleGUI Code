@@ -26,7 +26,7 @@ if __name__ == '__main__':
     nanoWaveForms = ['Square Raster', 'Sawtooth Raster']
     # Define the filename for the saved values
     values_file = 'saved_values.json'
-
+    
     # Load the saved values, if any
     try:
         with open(values_file, 'r') as f:
@@ -76,14 +76,17 @@ if __name__ == '__main__':
         sg.InputText(size=(5,1), key='-YPOINTS-'),
         sg.Text('Pixel Dwell Time (set to zero for fast FOV)'),
         sg.InputText(size=(5,1), key='-PIXELDWELLTIME-'),
-        sg.Text('Iterations'),
+        sg.Text('Iterations (0 for infinite)'),
         sg.InputText(size=(5,1), key='-ITERATIONS-'),
-
+        
         ],
         
 
         [sg.Button('Move to Abs Position'),
-        sg.Button('Start Scan')]
+        sg.Button('Start Scan'),
+        sg.Button('Stop Scanning'),
+        sg.Checkbox('Integration Mode', key = '-INTEGRATIONMODE-')],
+        
     ]
 
     layout = [[sg.TabGroup([[sg.Tab('Tagger', tagger_layout),
@@ -93,7 +96,7 @@ if __name__ == '__main__':
 
     # Event loop to process input
     while True:
-        event, values = window.read()
+        event, values = window.read(timeout=100)
 
         # If the user closes the window, exit the loop
         if event == sg.WINDOW_CLOSED:
@@ -210,9 +213,9 @@ if __name__ == '__main__':
             with open(values_file, 'w') as f:
                 json.dump(saved_values, f)
 
-            
-        if event == 'Start Scan':
 
+        if event == 'Start Scan' :
+            global_plot_control = True
             x_start = int(values['-STARTXCOORD-'])
             y_start = int(values['-STARTYCOORD-'])
             y_end = int(values['-ENDYCOORD-'])
@@ -221,58 +224,130 @@ if __name__ == '__main__':
             ny_pix = int(values['-YPOINTS-'])
             dwell_time = int(values['-PIXELDWELLTIME-'])
             iterations = int(values['-ITERATIONS-'])
-            if values['-NANOWAVEFORMS-'] == 'Square Raster':
-                square_raster = True
-
-            createScanPoints(x_start, y_start, nx_pix, ny_pix, x_end, y_end, 'path', square_raster = False)
-
-        
-                
-            x_start = int(values['-STARTXCOORD-'])
-            y_start = int(values['-STARTYCOORD-'])
-            y_end = int(values['-ENDYCOORD-'])
-            x_end = int(values['-ENDXCOORD-'])
-            nx_pix = int(values['-XPOINTS-'])
-            ny_pix = int(values['-YPOINTS-'])
-            dwell_time = int(values['-PIXELDWELLTIME-'])
-            iterations = int(values['-ITERATIONS-'])
+            if iterations == 0:
+                iterations = 100000000000000000000
             if values['-NANOWAVEFORMS-'] == 'Square Raster':
                 square_raster = True
             else:
                 square_raster = False
-            n_pixels = nx_pix*ny_pix 
-            tagger = tt.createTimeTagger()
-            tagger.setTestSignal(1, True)
 
-            img = np.zeros((ny_pix, nx_pix))
-            for i in range(iterations):
+            if values['-INTEGRATIONMODE-']:
                 
-                
-                cbm = tt.CountBetweenMarkers(tagger, 1, 3, 3, nx_pix*ny_pix )
-                p1 = mp.Process(target = startScanningWithoutWaveform, args = ('pathX.txt' , 'pathY.txt', None, 0, 1))
-                
-                p1.start()
+                if plt.get_fignums():
+                    plt.close()
+
+                createScanPoints(x_start = x_start, y_start = y_start, nx_pix = nx_pix, ny_pix = ny_pix, x_end = x_end, y_end =  y_end, file_name = 'path', square_raster = square_raster)
             
-                while p1.is_alive():
+                tagger = tt.createTimeTagger()
+                #tagger.setTestSignal(1, True)
+                tagger.setTriggerLevel(1,-.5)
+                int_img = np.zeros((ny_pix, nx_pix))
+                
+                plt.imshow(int_img, extent=[x_start, x_end, y_end, y_start], vmin = 0)
+                
+                cbar = plt.colorbar()
+                
+                for i in range(iterations):
+                    
+                    delay_signal = tt.DelayedChannel(tagger, 3, dwell_time * 1e6)
+                    delay_ch = delay_signal.getChannel()
+
+                    cbm = tt.CountBetweenMarkers(tagger, 1, 3, delay_ch, nx_pix*ny_pix )
+                    p1 = mp.Process(target = startScanningWithoutWaveform, args = ('pathX.txt' , 'pathY.txt', None, dwell_time, 1))#the args are (input pos for x, input pos for y, input pos for z, dwell time , iteratoins)
+                    
+                    p1.start()
+                    p1.join()
+
                     counts = cbm.getData()
-                    current_img = np.reshape(counts, (ny_pix, nx_pix))
+                    current_img =  np.reshape(counts, (ny_pix, nx_pix))
+                    int_img+=current_img
                     
-                    for i in range(ny_pix):
-                        if i%2 == 1 and square_raster:
-                            current_img[i,:] = current_img[i,::-1]
-                    print(counts)
-                    mask = current_img !=0
-                    img[mask]=current_img[mask]
-                    
-                    plt.imshow(img)
-                    plt.pause(.00000000001)
-                p1.join()
+
+                    cbar.remove()
+                    plt.imshow(int_img, extent=[x_start, x_end, y_end, y_start], vmin = 0)
+                    plt.xticks(np.arange(x_start, x_end, (x_end-x_start)/((x_end-x_start)/10)))
+                    plt.yticks(np.arange(y_start, y_end, (y_end-y_start)/((y_end-y_start)/10)))
+                    plt.ylabel('μm')
+                    plt.xlabel('μm')
+                    cbar = plt.colorbar()
+                    cbar.set_label('Counts')
+                    plt.pause(1)
+
+                    event, values = window.read(timeout = 100)
+                    if event == sg.WINDOW_CLOSED or event == 'Exit':
+                        break
+                    if event == 'Stop Scanning':
+                        break
+
+                cbar.remove()    
+                plt.colorbar()
+                plt.show()
                 
-            tt.freeTimeTagger(tagger) 
+                tt.freeTimeTagger(tagger) 
+
+
+            else:
+                if plt.get_fignums():
+                    plt.close()
+                       
+                createScanPoints(x_start = x_start, y_start = y_start, nx_pix = nx_pix, ny_pix = ny_pix, x_end = x_end, y_end =  y_end, file_name = 'path', square_raster = square_raster)
+
+                tagger = tt.createTimeTagger()
+                #tagger.setTestSignal(1, True)
+                tagger.setTriggerLevel(1,-.5)
+                img = np.zeros((ny_pix, nx_pix))
+                plt.imshow(img, extent=[x_start, x_end, y_end, y_start])
+                cbar = plt.colorbar()
+                
+                plt.tight_layout()
+                for i in range(iterations):
+                  
+                    delay_signal = tt.DelayedChannel(tagger, 3, dwell_time * 1e6)
+                    delay_ch = delay_signal.getChannel()
+
+                    cbm = tt.CountBetweenMarkers(tagger, 1, 3, delay_ch, nx_pix*ny_pix )
+                    p1 = mp.Process(target = startScanningWithoutWaveform, args = ('pathX.txt' , 'pathY.txt', None, dwell_time, 1))#the args are (input pos for x, input pos for y, input pos for z, dwell time , iteratoins)
+                    
+                    p1.start()
+                    
+                    while 1:
+                        counts = cbm.getData()
+                        current_img = np.reshape(counts, (ny_pix, nx_pix))
+                        
+                        if square_raster:
+                            for i in range(ny_pix):
+                                if i%2 == 1:
+                                    current_img[i,:] = current_img[i,::-1]
+
+                        mask = current_img !=0
+                        img[mask]=current_img[mask]
+                        
+                        cbar.remove()
+                        plt.imshow(img, extent=[x_start, x_end, y_end, y_start], vmin = 0)
+                        plt.tight_layout()
+                        plt.xticks(np.arange(x_start, x_end, (x_end-x_start)/((x_end-x_start)/10)))
+                        plt.yticks(np.arange(y_start, y_end, (y_end-y_start)/((y_end-y_start)/10)))
+                        plt.ylabel('μm')
+                        plt.xlabel('μm')
+                        cbar = plt.colorbar()
+                        
+                        cbar.set_label('Counts')
+                        
+                        plt.pause(.5)
+                        if p1.is_alive()==False:
+                            sleep(.5)
+                            break
+                    
+                    p1.join()
+                    event, values = window.read(timeout = 100)
+                    if event == sg.WINDOW_CLOSED or event == 'Exit':
+                        break
+                    if event == 'Stop Scanning':
+                        break
+ 
+                tt.freeTimeTagger(tagger) 
             
-
-
-
+            
 
             
 
