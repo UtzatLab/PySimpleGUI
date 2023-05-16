@@ -14,6 +14,12 @@ from time import sleep
 from ctypes import *
 from NanodriveControl import createScanPoints, startScanningWithoutWaveform
 import multiprocessing as mp
+import sys
+import clr
+from PVTMovementFunctions import mover , collect_data
+
+
+
 
 if __name__ == '__main__':
     #create the drop down menus 
@@ -89,10 +95,21 @@ if __name__ == '__main__':
         
     ]
 
+    pvtlayout = [
+    [sg.Text('Position (comma separated numbers):'), sg.Input(key='-POSITION-')],
+    [sg.Text('Directory:'), sg.Input(key='-DIRECTORY2-'), sg.FolderBrowse()],
+    [sg.Text('Names (comma separated values):'), sg.Input(key='-NAMES-')],
+    [sg.Text('Channels (comma separated numbers):'), sg.Input(key='-CHANNELS2-')],
+    [sg.Text('Voltage:'), sg.Input(key='-VOLTAGE2-')],
+    [sg.Text('Time:'), sg.Input(key='-TIME2-')],
+    [sg.Button('Get Data')],
+    ]
+
     layout = [[sg.TabGroup([[sg.Tab('Tagger', tagger_layout),
-                            sg.Tab('Nano Drive Stage', nano_stage_layout)]])]]
+                            sg.Tab('Nano Drive Stage', nano_stage_layout),sg.Tab('PVT',pvtlayout)]])]]
     # Create the window
     window = sg.Window('Input Window', layout)
+
 
     # Event loop to process input
     while True:
@@ -129,7 +146,8 @@ if __name__ == '__main__':
 
             filewriter = tt.FileWriter(synchronized.getTagger(),  directory + os.sep + name, channels)
 
-            synchronized.startFor(1e12*int(time))  
+            synchronized.startFor(1e12*int(time))
+            
             synchronized.waitUntilFinished()
             
             del filewriter
@@ -299,6 +317,8 @@ if __name__ == '__main__':
                 tagger.setTestSignal(1, True)
                 tagger.setTestSignal(2, True)
                 tagger.setTriggerLevel(1,-.5)
+
+                
                 img = np.zeros((ny_pix, nx_pix))
                 plt.imshow(img, extent=[x_start, x_end, y_end, y_start],  vmin = min_value, vmax = max_value)
                 cbar = plt.colorbar()
@@ -350,9 +370,43 @@ if __name__ == '__main__':
                         break
  
                 tt.freeTimeTagger(tagger) 
-            
-            
+        '''
+        EVENT ON TAB 3
 
+        ''' 
+        # Set initial values from previous inputs
+       
+                    
+        if event == 'Get Data':
+            tagger = tt.createTimeTagger()
+            # Retrieve input values from GUI
+            
+            positions  = [float(x) for x in values['-POSITION-'].split(',')]
+            directory = values['-DIRECTORY2-']
+            names = values['-NAMES-'].split(',')
+            channels = [int(x) for x in values['-CHANNELS2-'].split(',')]
+            voltage = float(values['-VOLTAGE2-'])
+            time = float(values['-TIME2-'])
+            #set test signal
+            tagger.setTestSignal(channels, True)
+            
+            for i in range(len(positions)):
+                name = names[i]
+                position = positions[i]
+                # Call the collect_data function with the provided inputs
+                synchronized = tt.SynchronizedMeasurements(tagger)
+                print(directory + os.sep + name)
+                filewriter = tt.FileWriter(synchronized.getTagger(),  directory + os.sep + name, channels)
+                synchronized.startFor(1e12*int(time))
+
+                mover(position, address='192.168.254.254', port=5001, group_name='Multiple1', pvtname='TestPVT.trj', timeout=100000)
+                synchronized.waitUntilFinished()
+
+                del filewriter
+                del synchronized
+    
+            tt.freeTimeTagger(tagger)
+          
             
 
     window.close()
