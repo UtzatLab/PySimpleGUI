@@ -17,9 +17,9 @@ import multiprocessing as mp
 import sys
 import clr
 from PVTMovementFunctions import mover , collect_data
-
-
-
+from NanodriveControl import  move_positive_x, move_negative_x, move_positive_y, move_negative_y, move_positive_z, move_negative_z, wait_for_key_input
+import keyboard
+from pathlib import Path
 
 if __name__ == '__main__':
     #create the drop down menus 
@@ -91,7 +91,9 @@ if __name__ == '__main__':
         [sg.Button('Move to Abs Position'),
         sg.Button('Start Scan'),
         sg.Button('Stop Scanning'),
-        sg.Checkbox('Integration Mode', key = '-INTEGRATIONMODE-')],
+        sg.Checkbox('Integration Mode', key = '-INTEGRATIONMODE-'),
+        sg.Button('Move Stage')],
+        
         
     ]
 
@@ -101,15 +103,23 @@ if __name__ == '__main__':
     [sg.Text('Names (comma separated values):'), sg.Input(key='-NAMES-')],
     [sg.Text('Channels (comma separated numbers):'), sg.Input(key='-CHANNELS2-')],
     [sg.Text('Voltage:'), sg.Input(key='-VOLTAGE2-')],
-    [sg.Text('Time:'), sg.Input(key='-TIME2-')],
+    [sg.Text('PVT File'), sg.Input(key = '-PVTFILE-'), sg.FileBrowse()],
     [sg.Button('Get Data')],
     ]
 
     layout = [[sg.TabGroup([[sg.Tab('Tagger', tagger_layout),
                             sg.Tab('Nano Drive Stage', nano_stage_layout),sg.Tab('PVT',pvtlayout)]])]]
     # Create the window
-    window = sg.Window('Input Window', layout)
+    window = sg.Window('Input Window', layout, enable_close_attempted_event=True, finalize=True)
+    window.UserData = sg.UserSettings()
 
+    window['-POSITION-'].update(window.UserData.get('-POSITION-', ''))
+    window['-PVTFILE-'].update(window.UserData.get('-PVTFILE-', ''))
+    window['-DIRECTORY2-'].update(window.UserData.get('-DIRECTORY2-', ''))
+    window['-NAMES-'].update(window.UserData.get('-NAMES-', ''))
+    window['-CHANNELS2-'].update(window.UserData.get('-CHANNELS2-', ''))
+    window['-VOLTAGE2-'].update(window.UserData.get('-VOLTAGE2-', ''))
+    
 
     # Event loop to process input
     while True:
@@ -231,6 +241,14 @@ if __name__ == '__main__':
             with open(values_file, 'w') as f:
                 json.dump(saved_values, f)
 
+        if event == 'Move Stage':
+            keyboard.add_hotkey('num 6', move_positive_x)
+            keyboard.add_hotkey('num 4', move_negative_x)
+            keyboard.add_hotkey('num 8', move_positive_y)
+            keyboard.add_hotkey('num 5', move_negative_y)
+            keyboard.add_hotkey('num 9', move_positive_z)
+            keyboard.add_hotkey('num 7', move_negative_z)
+            wait_for_key_input()
 
         if event == 'Start Scan' :
             global_plot_control = True
@@ -382,15 +400,38 @@ if __name__ == '__main__':
             # Retrieve input values from GUI
             
             positions  = [float(x) for x in values['-POSITION-'].split(',')]
+            PVT_file = values['-PVTFILE-']
             directory = values['-DIRECTORY2-']
             names = values['-NAMES-'].split(',')
             channels = [int(x) for x in values['-CHANNELS2-'].split(',')]
             voltage = float(values['-VOLTAGE2-'])
-            time = float(values['-TIME2-'])
+            
+
+            
+            i = -1
+            for name in names:
+                path = Path(directory + os.sep + name + '.ttbin')
+                if path.is_file():
+                    i +=1
+                    if directory + os.sep + name :
+                        names[i] = name + '_1'
+
+            print(names)
+            
+            with open(PVT_file, 'r') as file:
+                lines = file.readlines()
+                time = 0
+                for line in lines:
+                    elements = line.strip().split(', ')
+                    number = float(elements[0])
+                    time += number
+
+            print(time)
             #set test signal
-            tagger.setTestSignal(channels, True)
+            tagger.setTestSignal(2, False)
             
             for i in range(len(positions)):
+                
                 name = names[i]
                 position = positions[i]
                 # Call the collect_data function with the provided inputs
@@ -398,14 +439,21 @@ if __name__ == '__main__':
                 print(directory + os.sep + name)
                 filewriter = tt.FileWriter(synchronized.getTagger(),  directory + os.sep + name, channels)
                 synchronized.startFor(1e12*int(time))
-
-                mover(position, address='192.168.254.254', port=5001, group_name='Multiple1', pvtname='TestPVT.trj', timeout=100000)
+                mover(position, address='192.168.254.254', port=5001, group_name='Multiple1', pvtname=PVT_file, timeout=100000)
                 synchronized.waitUntilFinished()
-
+                
                 del filewriter
                 del synchronized
-    
+            
             tt.freeTimeTagger(tagger)
+
+            window.UserData['-POSITION-'] = values['-POSITION-']
+            window.UserData['-PVTFILE-'] = values['-PVTFILE-']
+            window.UserData['-DIRECTORY2-'] = values['-DIRECTORY2-']
+            window.UserData['-NAMES-'] = values['-NAMES-']
+            window.UserData['-CHANNELS2-'] = values['-CHANNELS2-']
+            window.UserData['-VOLTAGE2-'] = values['-VOLTAGE2-']
+           
           
             
 
