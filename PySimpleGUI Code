@@ -10,16 +10,17 @@ import TimeTagger as tt
 warnings.filterwarnings('ignore')
 from array import array
 import numba
-from time import sleep
+from time import sleep, time
 from ctypes import *
 from NanodriveControl import createScanPoints, startScanningWithoutWaveform
 import multiprocessing as mp
 import sys
 import clr
-from PVTMovementFunctions import mover , collect_data
+#from PVTMovementFunctions import mover , collect_data
 from NanodriveControl import  move_positive_x, move_negative_x, move_positive_y, move_negative_y, move_positive_z, move_negative_z, wait_for_key_input
 import keyboard
 from pathlib import Path
+import time as timing
 
 if __name__ == '__main__':
     #create the drop down menus 
@@ -405,7 +406,7 @@ if __name__ == '__main__':
             names = values['-NAMES-'].split(',')
             channels = [int(x) for x in values['-CHANNELS2-'].split(',')]
             voltage = float(values['-VOLTAGE2-'])
-            
+            print(PVT_file)
 
             
             i = -1
@@ -438,10 +439,33 @@ if __name__ == '__main__':
                 synchronized = tt.SynchronizedMeasurements(tagger)
                 print(directory + os.sep + name)
                 filewriter = tt.FileWriter(synchronized.getTagger(),  directory + os.sep + name, channels)
-                synchronized.startFor(1e12*int(time))
-                mover(position, address='192.168.254.254', port=5001, group_name='Multiple1', pvtname=PVT_file, timeout=100000)
-                synchronized.waitUntilFinished()
                 
+           
+                assemblypath = r"C:\Windows\Microsoft.NET\assembly\GAC_64\Newport.XPS.CommandInterface\v4.0_2.3.0.0__9a267756cf640dcf\Newport.XPS.CommandInterface.dll"
+               
+                clr.AddReference(assemblypath)
+              
+                from CommandInterfaceXPS import *
+               
+                xps = XPS()
+              
+                xps.OpenInstrument('192.168.254.254', 5001,100000)
+              
+                err_groupkill = xps.GroupKill('Multiple1')
+                err_groupinit = xps.GroupInitialize('Multiple1')
+                err_grouphome = xps.GroupHomeSearch('Multiple1')
+                
+                pvtname = PVT_file.rsplit('/', 1)[-1]
+                #sleep(.2)
+                filename = pvtname.rsplit('/', 1)[-1]
+                xps.GroupMoveAbsolute('Multiple1', [position], 1)
+                
+                synchronized.startFor(1e12*int(np.ceil(time)))
+                
+                err_exec = xps.MultipleAxesPVTExecution('Multiple1', filename, 1)
+                print(err_exec)
+              
+                synchronized.waitUntilFinished()
                 del filewriter
                 del synchronized
             
